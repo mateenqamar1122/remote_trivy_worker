@@ -73,7 +73,7 @@ secrets:
         
         # Run OpenGrep
         opengrep_cmd = [
-            "opengrep", "scan",
+            "/root/.local/bin/opengrep", "scan",
             "--config", "/opt/opengrep-rules",
             "--json", "--quiet", repo_dir
         ]
