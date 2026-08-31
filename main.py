@@ -75,16 +75,24 @@ secrets:
         opengrep_cmd = [
             "/root/.opengrep/cli/latest/opengrep", "scan",
             "--config", "/opt/opengrep-rules",
-            "--json", "--quiet", "--metrics=off", repo_dir
+            "--json", "--quiet", repo_dir
         ]
         
         logger.info("Executing Trivy and OpenGrep scanners concurrently...")
+        
+        # Universally disable interactive prompts and metrics via env variables
+        scan_env = os.environ.copy()
+        scan_env["CI"] = "true"
+        scan_env["OPENGREP_SEND_METRICS"] = "off"
+        scan_env["SEMGREP_SEND_METRICS"] = "off"
+        scan_env["TRIVY_NON_INTERACTIVE"] = "true"
         
         async def run_command(cmd):
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
+                env=scan_env
             )
             stdout, stderr = await proc.communicate()
             return stdout.decode("utf-8"), stderr.decode("utf-8"), proc.returncode
