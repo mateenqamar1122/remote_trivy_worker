@@ -5,8 +5,14 @@ FROM python:3.11-slim
 # Copy the official Trivy binary into our Python execution environment
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 
-# Install Git for repository cloning
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+# Install Git and Curl for repository cloning and OpenGrep installation
+RUN apt-get update && apt-get install -y git curl && rm -rf /var/lib/apt/lists/*
+
+# Install OpenGrep
+RUN curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/main/install.sh | bash
+
+# Clone OpenGrep rules
+RUN git clone https://github.com/opengrep/opengrep-rules /opt/opengrep-rules || echo "Rules clone failed, proceeding anyway"
 
 WORKDIR /app
 COPY requirements.txt .
