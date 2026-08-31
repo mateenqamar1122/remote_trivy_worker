@@ -14,6 +14,9 @@ RUN curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/main/install.
 # Clone OpenGrep rules
 RUN git clone https://github.com/opengrep/opengrep-rules /opt/opengrep-rules || echo "Rules clone failed, proceeding anyway"
 
+# Add the OpenGrep binary location to the system PATH
+ENV PATH="/root/.local/bin:${PATH}"
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
