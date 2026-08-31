@@ -90,11 +90,19 @@ secrets:
         async def run_command(cmd):
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=scan_env
             )
-            stdout, stderr = await proc.communicate()
+            try:
+                # Add a reasonable timeout so we don't hang infinitely (5 mins max per tool)
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300.0)
+            except asyncio.TimeoutError:
+                proc.kill()
+                stdout, stderr = await proc.communicate()
+                return "", f"Process timed out after 300 seconds", -1
+                
             return stdout.decode("utf-8"), stderr.decode("utf-8"), proc.returncode
 
         (trivy_out, trivy_err, trivy_code), (og_out, og_err, og_code) = await asyncio.gather(
