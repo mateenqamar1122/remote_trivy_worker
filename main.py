@@ -75,7 +75,7 @@ secrets:
         opengrep_cmd = [
             "/root/.opengrep/cli/latest/opengrep", "scan",
             "--config", "/opt/opengrep-rules",
-            "--json", "--quiet", repo_dir
+            "--json", "--quiet", "--metrics=off", repo_dir
         ]
         
         logger.info("Executing Trivy and OpenGrep scanners concurrently...")
