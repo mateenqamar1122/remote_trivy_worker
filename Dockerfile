@@ -23,5 +23,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Pre-download Trivy Vulnerability Database to ensure lightning-fast first scans
+RUN trivy image --download-db-only --no-progress || echo "Trivy DB download failed, will download at runtime"
+
 EXPOSE 8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -87,7 +87,10 @@ secrets:
         scan_env["SEMGREP_SEND_METRICS"] = "off"
         scan_env["TRIVY_NON_INTERACTIVE"] = "true"
         
-        async def run_command(cmd):
+        import time
+        async def run_command(name, cmd):
+            logger.info(f"[{name}] Starting execution...")
+            start_time = time.time()
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdin=asyncio.subprocess.DEVNULL,
@@ -96,18 +99,22 @@ secrets:
                 env=scan_env
             )
             try:
-                # Add a reasonable timeout so we don't hang infinitely (5 mins max per tool)
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300.0)
+                # Fast timeout for UX: 60 seconds max per scanner
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+                elapsed = time.time() - start_time
+                logger.info(f"[{name}] Finished successfully in {elapsed:.2f} seconds.")
             except asyncio.TimeoutError:
                 proc.kill()
                 stdout, stderr = await proc.communicate()
-                return "", f"Process timed out after 300 seconds", -1
+                elapsed = time.time() - start_time
+                logger.error(f"[{name}] KILLED after {elapsed:.2f} seconds (Timeout reached).")
+                return "", f"Process timed out after 60 seconds", -1
                 
             return stdout.decode("utf-8"), stderr.decode("utf-8"), proc.returncode
 
         (trivy_out, trivy_err, trivy_code), (og_out, og_err, og_code) = await asyncio.gather(
-            run_command(trivy_cmd),
-            run_command(opengrep_cmd)
+            run_command("TRIVY", trivy_cmd),
+            run_command("OPENGREP", opengrep_cmd)
         )
 
         results = {}
