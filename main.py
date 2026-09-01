@@ -79,22 +79,31 @@ node_modules/
 vendor/
 packages/
 .venv/
+venv/
+env/
 dist/
 build/
 bin/
+obj/
+out/
+.next/
+.nuxt/
+coverage/
 *.exe
 *.jar
 *.min.js
 *.css.map
+*.bundle.js
+*.chunk.js
 mock/
 snapshots/
             """.strip())
 
-        # Dynamic CPU Allocation: use max(1, min(4, cpu_count // 2))
+        # Dynamic CPU Allocation: use max(1, min(4, cpu_count)) to maximize performance
         import multiprocessing
         import signal
         cpu_count = multiprocessing.cpu_count()
-        threads = str(max(1, min(4, cpu_count // 2)))
+        threads = str(max(1, min(4, cpu_count)))
 
         # Run OpenGrep with explicitly limited threads to prevent CPU starvation
         opengrep_cmd = [
@@ -133,8 +142,8 @@ snapshots/
                 preexec_fn=os.setsid if os.name == 'posix' else None
             )
             try:
-                # 300 seconds (5 mins) max per scanner
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300.0)
+                # 600 seconds (10 mins) max per scanner
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=600.0)
                 elapsed = time.time() - start_time
                 logger.info(f"[{name}] Finished successfully in {elapsed:.2f} seconds.")
             except asyncio.TimeoutError:
@@ -155,7 +164,7 @@ snapshots/
                     
                 elapsed = time.time() - start_time
                 logger.error(f"[{name}] KILLED after {elapsed:.2f} seconds (Timeout reached). Process tree terminated.")
-                return "", f"Process timed out after 300 seconds", -1
+                return "", f"Process timed out after 600 seconds", -1
                 
             return stdout.decode("utf-8"), stderr.decode("utf-8"), proc.returncode
 
