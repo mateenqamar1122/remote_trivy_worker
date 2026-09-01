@@ -108,13 +108,14 @@ snapshots/
         # Run OpenGrep with explicitly limited threads to prevent CPU starvation
         opengrep_cmd = [
             "/root/.opengrep/cli/latest/opengrep", "scan",
-            "--config", "/opt/opengrep-rules",
+            "--config", "p/ci", # Use the highly-optimized CI ruleset for speed (30s) instead of thousands of local rules
             "-j", threads, 
-            "--timeout", "15",  # Per-file timeout (15 seconds)
+            "--timeout", "5",  # Aggressive 5-second per-file timeout
             "--timeout-threshold", "3",
-            "--max-target-bytes", "1000000", # Skip minified files >1MB
+            "--max-target-bytes", "500000", # Skip files >500KB
             "--max-memory", "2048", # Hard limit 2GB RAM per process
             "--skip-unknown-extensions",
+            "--no-git-ignore", # Don't waste time parsing complex gitignores, rely on .opengrepignore
             "--json", "--quiet", repo_dir
         ]
         
