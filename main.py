@@ -71,10 +71,30 @@ secrets:
             "--secret-config", custom_secret_conf
         ]
         
-        # Run OpenGrep
+        # Write .opengrepignore to vastly speed up AST parsing on large codebases
+        opengrepignore_path = os.path.join(repo_dir, ".opengrepignore")
+        with open(opengrepignore_path, "w") as f:
+            f.write("""
+node_modules/
+vendor/
+packages/
+.venv/
+dist/
+build/
+bin/
+*.exe
+*.jar
+*.min.js
+*.css.map
+mock/
+snapshots/
+            """.strip())
+
+        # Run OpenGrep with explicitly limited threads to prevent CPU starvation
         opengrep_cmd = [
             "/root/.opengrep/cli/latest/opengrep", "scan",
             "--config", "/opt/opengrep-rules",
+            "-j", "2", 
             "--json", "--quiet", repo_dir
         ]
         
