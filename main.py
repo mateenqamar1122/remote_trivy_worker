@@ -3,9 +3,13 @@ import shutil
 import tempfile
 import subprocess
 import json
+import logging
+import multiprocessing
+import signal
+import asyncio
+import time
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import logging
 
 app = FastAPI(title="Sentrige Remote Scanner")
 logger = logging.getLogger("uvicorn.error")
@@ -14,6 +18,17 @@ class ScanRequest(BaseModel):
     repo_full_name: str
     token: str = ""
     provider: str = "github"
+
+def get_opengrep_binary() -> str:
+    for candidate in [
+        shutil.which("opengrep"),
+        "/root/.local/bin/opengrep",
+        "/root/.opengrep/cli/latest/opengrep",
+        "/usr/local/bin/opengrep"
+    ]:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return "opengrep"
 
 @app.post("/scan")
 async def scan_repository(req: ScanRequest):
@@ -43,26 +58,49 @@ async def scan_repository(req: ScanRequest):
         if clone_res.returncode != 0:
             raise HTTPException(status_code=400, detail=f"Git clone failed: {clone_res.stderr}")
             
-        # Write Secret config
+        # Write Comprehensive Secret Rule Configuration for Trivy
         custom_secret_conf = os.path.join(repo_dir, "trivy-secret.yaml")
         with open(custom_secret_conf, "w") as f:
             f.write("""
-secrets:
+rules:
+  - id: aws-access-key-id
+    category: AWS Access Key ID
+    title: AWS Access Key ID
+    severity: CRITICAL
+    regex: '(?i)(?:A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}'
+  - id: aws-secret-access-key
+    category: AWS Secret Access Key
+    title: AWS Secret Access Key
+    severity: CRITICAL
+    regex: '(?i)(?:aws_secret_access_key|secretAccessKey|aws_secret_key)\\s*[:=]\\s*["'']?[A-Za-z0-9/+=]{16,}["'']?'
+  - id: supabase-publishable-key
+    category: Supabase API Key
+    title: Supabase API / JWT Token
+    severity: HIGH
+    regex: 'eyJ[A-Za-z0-9-_=]+\\.[A-Za-z0-9-_=]+\\.?[A-Za-z0-9-_.+/=]*'
+  - id: generic-hardcoded-secret
+    category: Generic Secret
+    title: Generic Hardcoded Credentials
+    severity: HIGH
+    regex: '(?i)(?:access_key|accesskey|accesskeyid|secret_key|secretkey|secretaccesskey|api_key|apikey|auth_token|authtoken|passwd|password|private_key|aws_key)\\s*[:=]\\s*["'']?[a-zA-Z0-9_\\-/.+=]{8,}["'']?'
   - id: gemini-api-key
+    category: Google Gemini API Key
     title: Google Gemini API Key
     severity: CRITICAL
-    regex: >-
-      (?i)AIza[0-9A-Za-z\\-_]{35}
-  - id: generic-env-secret
-    title: Generic Environment Secret
-    severity: HIGH
-    regex: >-
-      (?i)(password|secret|token|api_key|apikey)\\s*[:=]\\s*[\"\']?[a-zA-Z0-9_\\-]{4,}[\"\']?
+    regex: '(?i)AIza[0-9A-Za-z\\-_]{35}'
+  - id: github-personal-access-token
+    category: GitHub Personal Access Token
+    title: GitHub Personal Access Token
+    severity: CRITICAL
+    regex: 'ghp_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}'
+  - id: private-cryptographic-key
+    category: Private Key
+    title: Private Cryptographic Key
+    severity: CRITICAL
+    regex: '-----BEGIN (?:RSA|EC|OPENSSH|DSA|PRIVATE) KEY-----'
 """)
-            
-        import asyncio
 
-        # Run Trivy
+        # Run Trivy with full scanners and comprehensive secret ruleset
         trivy_cmd = [
             "trivy", "fs", repo_dir,
             "--format", "json",
@@ -70,7 +108,7 @@ secrets:
             "--scanners", "vuln,secret,misconfig,license",
             "--secret-config", custom_secret_conf
         ]
-        
+
         # Write .opengrepignore to vastly speed up AST parsing on large codebases
         opengrepignore_path = os.path.join(repo_dir, ".opengrepignore")
         with open(opengrepignore_path, "w") as f:
@@ -95,45 +133,45 @@ coverage/
 *.css.map
 *.bundle.js
 *.chunk.js
-mock/
-snapshots/
             """.strip())
 
-        # Dynamic CPU Allocation: use max(1, min(4, cpu_count)) to maximize performance
-        import multiprocessing
-        import signal
         cpu_count = multiprocessing.cpu_count()
         threads = str(max(1, min(4, cpu_count)))
+        opengrep_bin = get_opengrep_binary()
 
-        # Run OpenGrep with explicitly limited threads to prevent CPU starvation
-        opengrep_cmd = [
-            "/root/.opengrep/cli/latest/opengrep", "scan",
-            "--config", "p/ci", # Use the highly-optimized CI ruleset for speed (30s) instead of thousands of local rules
-            "-j", threads, 
-            "--timeout", "5",  # Aggressive 5-second per-file timeout
+        # Build OpenGrep command using local rules repository if available, plus standard packs
+        opengrep_cmd = [opengrep_bin, "scan"]
+
+        if os.path.exists("/opt/opengrep-rules"):
+            opengrep_cmd.extend(["--config", "/opt/opengrep-rules"])
+
+        opengrep_cmd.extend([
+            "--config", "p/default",
+            "--config", "p/security-audit",
+            "--config", "p/secrets",
+            "--config", "p/owasp-top-ten",
+            "-j", threads,
+            "--timeout", "15",
             "--timeout-threshold", "3",
-            "--max-target-bytes", "500000", # Skip files >500KB
-            "--max-memory", "2048", # Hard limit 2GB RAM per process
+            "--max-target-bytes", "1000000",
+            "--max-memory", "2048",
             "--skip-unknown-extensions",
-            "--no-git-ignore", # Don't waste time parsing complex gitignores, rely on .opengrepignore
+            "--no-git-ignore",
             "--json", "--quiet", repo_dir
-        ]
-        
-        logger.info(f"Executing Trivy and OpenGrep scanners concurrently (OpenGrep threads: {threads})...")
-        
-        # Universally disable interactive prompts and metrics via env variables
+        ])
+
+        logger.info(f"Executing Trivy and OpenGrep scanners concurrently on {req.repo_full_name} (OpenGrep threads: {threads})...")
+
         scan_env = os.environ.copy()
         scan_env["CI"] = "true"
         scan_env["OPENGREP_SEND_METRICS"] = "off"
         scan_env["SEMGREP_SEND_METRICS"] = "off"
         scan_env["TRIVY_NON_INTERACTIVE"] = "true"
-        
-        import time
+
         async def run_command(name, cmd):
-            logger.info(f"[{name}] Starting execution...")
+            logger.info(f"[{name}] Starting execution with command: {' '.join(cmd[:4])}...")
             start_time = time.time()
             
-            # Use preexec_fn=os.setsid to detach the process group so we can reliably kill children
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdin=asyncio.subprocess.DEVNULL,
@@ -143,13 +181,11 @@ snapshots/
                 preexec_fn=os.setsid if os.name == 'posix' else None
             )
             try:
-                # 600 seconds (10 mins) max per scanner
                 stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=600.0)
                 elapsed = time.time() - start_time
                 logger.info(f"[{name}] Finished successfully in {elapsed:.2f} seconds.")
             except asyncio.TimeoutError:
                 if os.name == 'posix':
-                    # Annihilate the entire process tree to prevent zombie leaks
                     try:
                         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
                     except ProcessLookupError:
@@ -158,16 +194,15 @@ snapshots/
                     proc.kill()
                     
                 try:
-                    # Prevent hanging if child processes block stdout/stderr pipes
                     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5.0)
                 except asyncio.TimeoutError:
                     pass
                     
                 elapsed = time.time() - start_time
-                logger.error(f"[{name}] KILLED after {elapsed:.2f} seconds (Timeout reached). Process tree terminated.")
+                logger.error(f"[{name}] KILLED after {elapsed:.2f} seconds (Timeout reached).")
                 return "", f"Process timed out after 600 seconds", -1
                 
-            return stdout.decode("utf-8"), stderr.decode("utf-8"), proc.returncode
+            return stdout.decode("utf-8", errors="ignore"), stderr.decode("utf-8", errors="ignore"), proc.returncode
 
         (trivy_out, trivy_err, trivy_code), (og_out, og_err, og_code) = await asyncio.gather(
             run_command("TRIVY", trivy_cmd),
@@ -176,7 +211,7 @@ snapshots/
 
         results = {}
 
-        # Parse Trivy
+        # Parse Trivy Output
         trivy_str = trivy_out.strip()
         if not trivy_str:
             if "FATAL" in trivy_err:
@@ -186,23 +221,24 @@ snapshots/
             try:
                 results["trivy"] = json.loads(trivy_str)
             except json.JSONDecodeError:
-                logger.error(f"Failed to parse Trivy output. Error: {trivy_err}")
+                logger.error(f"Failed to parse Trivy output: {trivy_err}")
                 results["trivy"] = {"Results": []}
 
-        # Parse OpenGrep
+        # Parse OpenGrep Output
         og_str = og_out.strip()
         if not og_str:
-            logger.error(f"OpenGrep error: {og_err}")
+            if og_err:
+                logger.error(f"OpenGrep warning/error: {og_err}")
             results["opengrep"] = {"results": []}
         else:
             try:
                 results["opengrep"] = json.loads(og_str)
             except json.JSONDecodeError:
-                logger.error(f"Failed to parse OpenGrep output. Error: {og_err}")
+                logger.error(f"Failed to parse OpenGrep output: {og_err}")
                 results["opengrep"] = {"results": []}
 
         return results
-            
+
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 

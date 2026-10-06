@@ -11,11 +11,11 @@ RUN apt-get update && apt-get install -y git curl && rm -rf /var/lib/apt/lists/*
 # Install OpenGrep
 RUN curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/main/install.sh | bash
 
-# Clone OpenGrep rules
+# Clone OpenGrep rules locally for offline/fast scanning
 RUN git clone https://github.com/opengrep/opengrep-rules /opt/opengrep-rules || echo "Rules clone failed, proceeding anyway"
 
-# Add the OpenGrep binary location to the system PATH
-ENV PATH="/root/.local/bin:${PATH}"
+# Add OpenGrep binary locations to the system PATH
+ENV PATH="/root/.local/bin:/root/.opengrep/cli/latest:${PATH}"
 
 WORKDIR /app
 COPY requirements.txt .
