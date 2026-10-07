@@ -156,7 +156,9 @@ coverage/
             "--max-target-bytes", "1000000",
             "--max-memory", "2048",
             "--skip-unknown-extensions",
-            "--no-git-ignore",
+            "--exclude", "node_modules",
+            "--exclude", ".git",
+            "--exclude", "vendor",
             "--json", "--quiet", repo_dir
         ])
 
