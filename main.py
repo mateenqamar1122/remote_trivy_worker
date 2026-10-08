@@ -146,10 +146,6 @@ coverage/
             opengrep_cmd.extend(["--config", "/opt/opengrep-rules"])
 
         opengrep_cmd.extend([
-            "--config", "p/default",
-            "--config", "p/security-audit",
-            "--config", "p/secrets",
-            "--config", "p/owasp-top-ten",
             "-j", threads,
             "--timeout", "15",
             "--timeout-threshold", "3",
