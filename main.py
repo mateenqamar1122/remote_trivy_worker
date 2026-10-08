@@ -156,9 +156,7 @@ coverage/
             "--exclude", "node_modules/**",
             "--exclude", ".git/**",
             "--exclude", "vendor/**",
-            "--metrics=off",
-            "--disable-version-check",
-            "--json", "--quiet", repo_dir
+            "--json", "--quiet", "."
         ])
 
         logger.info(f"Executing Trivy and OpenGrep scanners concurrently on {req.repo_full_name} (OpenGrep threads: {threads})...")
@@ -182,6 +180,7 @@ coverage/
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=scan_env,
+                cwd=repo_dir,
                 preexec_fn=os.setsid if os.name == 'posix' else None
             )
             try:
