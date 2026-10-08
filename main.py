@@ -156,6 +156,8 @@ coverage/
             "--exclude", "node_modules/**",
             "--exclude", ".git/**",
             "--exclude", "vendor/**",
+            "--metrics=off",
+            "--disable-version-check",
             "--json", "--quiet", repo_dir
         ])
 
@@ -164,6 +166,9 @@ coverage/
         scan_env = os.environ.copy()
         scan_env["CI"] = "true"
         scan_env["OPENGREP_SEND_METRICS"] = "off"
+        scan_env["SEMGREP_SEND_METRICS"] = "off"
+        scan_env["OPENGREP_ENABLE_VERSION_CHECK"] = "0"
+        scan_env["SEMGREP_ENABLE_VERSION_CHECK"] = "0"
         scan_env["SEMGREP_SEND_METRICS"] = "off"
         scan_env["TRIVY_NON_INTERACTIVE"] = "true"
 
@@ -225,6 +230,9 @@ coverage/
 
         # Parse OpenGrep Output
         og_str = og_out.strip()
+        if og_err:
+            logger.info(f"OpenGrep stderr: {og_err}")
+            
         if not og_str:
             if og_err:
                 logger.error(f"OpenGrep warning/error: {og_err}")
@@ -233,7 +241,7 @@ coverage/
             try:
                 results["opengrep"] = json.loads(og_str)
             except json.JSONDecodeError:
-                logger.error(f"Failed to parse OpenGrep output: {og_err}")
+                logger.error(f"Failed to parse OpenGrep output. Stderr: {og_err}")
                 results["opengrep"] = {"results": []}
 
         return results
