@@ -109,10 +109,11 @@ rules:
             "--secret-config", custom_secret_conf
         ]
 
-        # Write .opengrepignore to vastly speed up AST parsing on large codebases
-        opengrepignore_path = os.path.join(repo_dir, ".opengrepignore")
-        with open(opengrepignore_path, "w") as f:
-            f.write("""
+        # Write .opengrepignore and .semgrepignore to vastly speed up AST parsing on large codebases
+        for ignore_file in [".opengrepignore", ".semgrepignore"]:
+            ignore_path = os.path.join(repo_dir, ignore_file)
+            with open(ignore_path, "w") as f:
+                f.write("""
 node_modules/
 vendor/
 packages/
@@ -133,7 +134,7 @@ coverage/
 *.css.map
 *.bundle.js
 *.chunk.js
-            """.strip())
+                """.strip())
 
         cpu_count = multiprocessing.cpu_count()
         threads = str(max(1, min(4, cpu_count)))
@@ -152,9 +153,9 @@ coverage/
             "--max-target-bytes", "1000000",
             "--max-memory", "2048",
             "--skip-unknown-extensions",
-            "--exclude", "node_modules",
-            "--exclude", ".git",
-            "--exclude", "vendor",
+            "--exclude", "node_modules/**",
+            "--exclude", ".git/**",
+            "--exclude", "vendor/**",
             "--json", "--quiet", repo_dir
         ])
 
