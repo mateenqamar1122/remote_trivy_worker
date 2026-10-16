@@ -30,6 +30,82 @@ def get_opengrep_binary() -> str:
             return candidate
     return "opengrep"
 
+def is_false_positive_secret(match: str, rule_id: str = "") -> bool:
+    """
+    Detects false positive secret occurrences:
+    - Dynamic environment reads (e.g., Deno.env.get, process.env, os.environ, os.getenv)
+    - Type annotations and interface signatures (e.g. apiKey: string)
+    - Common placeholder and dummy test strings
+    """
+    if not match:
+        return False
+    m = match.strip().lower()
+
+    # Dynamic environment variable access
+    env_indicators = [
+        "deno.env",
+        "process.env",
+        "os.environ",
+        "os.getenv",
+        "system.getenv",
+        "env.get(",
+        "getenv(",
+        "config.get(",
+        "settings.get(",
+        "config[",
+        "settings[",
+        "secrets.get(",
+        "request.headers",
+        "req.headers",
+        "headers.get",
+    ]
+    if any(ind in m for ind in env_indicators):
+        return True
+
+    # Type declarations
+    type_indicators = [
+        ": string",
+        ": str",
+        ": string |",
+        ": optional[str]",
+        ": text",
+    ]
+    if any(ind in m for ind in type_indicators):
+        return True
+
+    # Placeholders / mock tokens
+    dummy_indicators = [
+        "your_",
+        "your-",
+        "<your",
+        "placeholder",
+        "changeme",
+        "dummy",
+        "example",
+        "xxxx",
+        "test_key",
+        "temp_key",
+        "none",
+        "null",
+        "undefined",
+        "true",
+        "false",
+        "123456",
+        "sample",
+    ]
+    if any(ind in m for ind in dummy_indicators):
+        return True
+
+    # For generic secret rule, ensure it is an actual quoted string literal and not a function call
+    if "generic" in rule_id.lower():
+        if '"' not in match and "'" not in match and "`" not in match:
+            return True
+        if "(" in match and ")" in match:
+            return True
+
+    return False
+
+
 @app.post("/scan")
 async def scan_repository(req: ScanRequest):
     work_dir = tempfile.mkdtemp(prefix="remote_trivy_")
@@ -72,7 +148,7 @@ rules:
     category: AWS Secret Access Key
     title: AWS Secret Access Key
     severity: CRITICAL
-    regex: '(?i)(?:aws_secret_access_key|secretAccessKey|aws_secret_key)\\s*[:=]\\s*["'']?[A-Za-z0-9/+=]{16,}["'']?'
+    regex: '(?i)(?:aws_secret_access_key|secretAccessKey|aws_secret_key)\\s*[:=]\\s*["''][A-Za-z0-9/+=]{16,}["'']'
   - id: supabase-publishable-key
     category: Supabase API Key
     title: Supabase API / JWT Token
@@ -82,7 +158,7 @@ rules:
     category: Generic Secret
     title: Generic Hardcoded Credentials
     severity: HIGH
-    regex: '(?i)(?:access_key|accesskey|accesskeyid|secret_key|secretkey|secretaccesskey|api_key|apikey|auth_token|authtoken|passwd|password|private_key|aws_key)\\s*[:=]\\s*["'']?[a-zA-Z0-9_\\-/.+=]{8,}["'']?'
+    regex: '(?i)(?:access_key|secret_key|api_key|apikey|auth_token|passwd|password|private_key)\\s*[:=]\\s*["''][A-Za-z0-9_\\-/.+=]{16,}["'']'
   - id: gemini-api-key
     category: Google Gemini API Key
     title: Google Gemini API Key
@@ -143,8 +219,10 @@ coverage/
         # Build OpenGrep command using local rules repository if available, plus standard packs
         opengrep_cmd = [opengrep_bin, "scan"]
 
-        if os.path.exists("/opt/opengrep-rules"):
+        if os.path.exists("/opt/opengrep-rules") and os.path.isdir("/opt/opengrep-rules") and os.listdir("/opt/opengrep-rules"):
             opengrep_cmd.extend(["--config", "/opt/opengrep-rules"])
+        else:
+            opengrep_cmd.extend(["--config", "auto"])
 
         opengrep_cmd.extend([
             "-j", threads,
@@ -162,12 +240,10 @@ coverage/
         logger.info(f"Executing Trivy and OpenGrep scanners concurrently on {req.repo_full_name} (OpenGrep threads: {threads})...")
 
         scan_env = os.environ.copy()
+        # Clean any metrics / telemetry environment variables so OpenGrep does NOT receive unsupported '--metrics' flag
+        for var in ["OPENGREP_SEND_METRICS", "SEMGREP_SEND_METRICS", "OPENGREP_ENABLE_VERSION_CHECK", "SEMGREP_ENABLE_VERSION_CHECK"]:
+            scan_env.pop(var, None)
         scan_env["CI"] = "true"
-        scan_env["OPENGREP_SEND_METRICS"] = "off"
-        scan_env["SEMGREP_SEND_METRICS"] = "off"
-        scan_env["OPENGREP_ENABLE_VERSION_CHECK"] = "0"
-        scan_env["SEMGREP_ENABLE_VERSION_CHECK"] = "0"
-        scan_env["SEMGREP_SEND_METRICS"] = "off"
         scan_env["TRIVY_NON_INTERACTIVE"] = "true"
 
         async def run_command(name, cmd):
@@ -222,7 +298,20 @@ coverage/
             results["trivy"] = {"Results": []}
         else:
             try:
-                results["trivy"] = json.loads(trivy_str)
+                parsed_trivy = json.loads(trivy_str)
+                # Filter out false positive secrets (e.g. Deno.env.get, process.env, mock placeholders)
+                for res in parsed_trivy.get("Results", []):
+                    if "Secrets" in res and res["Secrets"]:
+                        clean_secrets = []
+                        for sec in res["Secrets"]:
+                            match = sec.get("Match", "") or ""
+                            rule_id = sec.get("RuleID", "")
+                            if is_false_positive_secret(match, rule_id):
+                                logger.info(f"[TRIVY] Dropped false positive secret in {res.get('Target')}: {match[:60]}")
+                                continue
+                            clean_secrets.append(sec)
+                        res["Secrets"] = clean_secrets
+                results["trivy"] = parsed_trivy
             except json.JSONDecodeError:
                 logger.error(f"Failed to parse Trivy output: {trivy_err}")
                 results["trivy"] = {"Results": []}
